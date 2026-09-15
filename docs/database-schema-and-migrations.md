@@ -72,7 +72,7 @@ Migrations are stored in `migrations/` and executed sequentially using `goose` u
    - `workers`, `worker_sessions`, `worker_deployments`
    - `runs`, `run_steps`, `task_attempts`, `task_leases`
    - `run_events` (append-only history)
-   - `timers`, `idempotency_records`, `outbox_events`
+   - `timers`, `idempotency_records`, `outbox_events` (migration `00014` adds dispatch diagnostics and due-scan indexing)
    - Composite foreign keys:
      - `task_attempts(organization_id, session_id)` $\rightarrow$ `worker_sessions(organization_id, id)`
      - `task_leases(organization_id, session_id)` $\rightarrow$ `worker_sessions(organization_id, id)`

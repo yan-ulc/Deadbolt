@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +54,11 @@ type TCPNATSChecker struct {
 
 // NewTCPNATSChecker creates a new TCPNATSChecker
 func NewTCPNATSChecker(addr string) *TCPNATSChecker {
+	if strings.Contains(addr, "://") {
+		if parsed, err := url.Parse(addr); err == nil && parsed.Host != "" {
+			addr = parsed.Host
+		}
+	}
 	return &TCPNATSChecker{addr: addr}
 }
 

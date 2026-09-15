@@ -18,11 +18,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/nats-io/nats.go"
 
 	"github.com/Ryanakml/Deadbolt/internal/auth"
 	"github.com/Ryanakml/Deadbolt/internal/controlplane"
 	"github.com/Ryanakml/Deadbolt/internal/gateway"
+	"github.com/Ryanakml/Deadbolt/internal/outbox"
 	"github.com/Ryanakml/Deadbolt/internal/scheduling"
+	"github.com/Ryanakml/Deadbolt/internal/storage"
 	"github.com/Ryanakml/Deadbolt/internal/storage/migrator"
 )
 
@@ -198,8 +201,11 @@ func run() error {
 		}
 	}
 	natsChecker := gateway.NewTCPNATSChecker(natsURL)
+	var natsConn *nats.Conn
+	var wakeupSubscriber *outbox.WakeupSubscriber
 
-	// Latest expected migration in M1 is 6 (00006_api_keys_lookup.sql)
+	// Latest expected migration is kept in the migrator package and includes the
+	// Issue #13 outbox dispatch-state migration.
 	healthChecker := gateway.NewHealthChecker(versionInfo, pool, natsChecker, migrator.LatestSchemaVersion)
 
 	// Wire active scheduler freshness ticker through authoritative reconciler sweeps (Blueprint §24.3 & §25.2)
@@ -240,6 +246,48 @@ func run() error {
 				logger.Printf("[SCHEDULER] Reconciler loop terminated: %v", err)
 			}
 		}()
+
+		// NATS is a wake-up transport only. A broker outage must not prevent the
+		// control plane from starting; periodic PostgreSQL reconciliation remains
+		// the safety net.
+		conn, natsErr := nats.Connect(natsURL,
+			nats.Name("deadbolt-control-plane"),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(2*time.Second),
+			nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+				logger.Printf("[NATS] disconnected: %v", err)
+			}),
+			nats.ReconnectHandler(func(_ *nats.Conn) {
+				logger.Printf("[NATS] reconnected")
+			}),
+		)
+		if natsErr != nil {
+			logger.Printf("[NATS] wake-up transport unavailable; PostgreSQL reconciliation remains active: %v", natsErr)
+		} else {
+			natsConn = conn
+			js, jsErr := conn.JetStream()
+			if jsErr != nil {
+				logger.Printf("[NATS] JetStream unavailable; PostgreSQL reconciliation remains active: %v", jsErr)
+			} else if streamErr := outbox.EnsureWakeupStream(js); streamErr != nil {
+				logger.Printf("[NATS] wake-up stream setup failed; PostgreSQL reconciliation remains active: %v", streamErr)
+			} else {
+				wakeupSubscriber = outbox.NewWakeupSubscriber(js, reconciler.Wake)
+				if subErr := wakeupSubscriber.Start(); subErr != nil {
+					logger.Printf("[NATS] wake-up subscriber failed: %v", subErr)
+					wakeupSubscriber = nil
+				} else {
+					runtimePool := storage.NewPool(pool)
+					if pool != nil && reconcilerPool != nil {
+						dispatcher := outbox.NewDispatcher(runtimePool, outbox.NewSQLTenantSource(reconcilerPool), outbox.NewJetStreamPublisher(js), outbox.Config{}, logger)
+						go func() {
+							if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+								logger.Printf("[OUTBOX] dispatcher terminated: %v", err)
+							}
+						}()
+					}
+				}
+			}
+		}
 	}
 
 	mux := BuildMux(cfg, pool, healthChecker, logger)
@@ -270,8 +318,19 @@ func run() error {
 		logger.Printf("Received termination signal %s; starting graceful shutdown...", sig)
 	}
 
+	// Stop background reconciliation, outbox dispatch, and broker callbacks
+	// before closing their database/broker resources.
+	cancel()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
+	if wakeupSubscriber != nil {
+		if err := wakeupSubscriber.Drain(shutdownCtx); err != nil {
+			logger.Printf("[NATS] subscriber drain error: %v", err)
+		}
+	}
+	if natsConn != nil {
+		natsConn.Close()
+	}
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Printf("Server shutdown error: %v", err)
