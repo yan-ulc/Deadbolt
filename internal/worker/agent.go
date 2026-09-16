@@ -212,8 +212,11 @@ func (a *Agent) ensureIdentity(ctx context.Context) error {
 	challengeReq := &ChallengeRequestDTO{
 		ProtocolVersion: ProtocolVersion,
 		RequestID:       fmt.Sprintf("req_chal_%d", time.Now().UnixNano()),
-		PublicKey:       EncodePublicKey(a.pubKey),
-		WorkerID:        a.workerID,
+	}
+	if a.workerID != "" {
+		challengeReq.WorkerID = a.workerID
+	} else {
+		challengeReq.PublicKey = EncodePublicKey(a.pubKey)
 	}
 	challengeRes, err := a.requestChallenge(ctx, challengeReq)
 	if err != nil {
@@ -716,7 +719,6 @@ func (a *Agent) refreshSession(ctx context.Context) error {
 		ProtocolVersion: ProtocolVersion,
 		RequestID:       fmt.Sprintf("req_chal_%d", time.Now().UnixNano()),
 		WorkerID:        a.workerID,
-		PublicKey:       EncodePublicKey(a.pubKey),
 	})
 	if err != nil {
 		return err

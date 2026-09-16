@@ -63,10 +63,20 @@ func VerifyArchitecture(targetArch string, hostArch string) error {
 		"windows-x64":  "windows/amd64",
 	}
 
-	if targetAliased, ok := aliases[normTarget]; ok && targetAliased == normHost {
+	if targetAliased, ok := aliases[normTarget]; ok {
+		normTarget = targetAliased
+	}
+	if hostAliased, ok := aliases[normHost]; ok {
+		normHost = hostAliased
+	}
+
+	if normTarget == normHost {
 		return nil
 	}
-	if hostAliased, ok := aliases[normHost]; ok && hostAliased == normTarget {
+
+	// Allow Darwin (macOS) local worker execution for matching CPU architecture of Linux target
+	if (normTarget == "linux/arm64" && normHost == "darwin/arm64") ||
+		(normTarget == "linux/amd64" && normHost == "darwin/amd64") {
 		return nil
 	}
 

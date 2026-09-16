@@ -28,6 +28,9 @@ func (h *HTTPHandler) Register(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, r, 400, "MISSING_ENVIRONMENT", "Environment is required")
 		return
 	}
+	if caller.Type == tenant.IdentityTypeMachine && (env == caller.EnvironmentName || env == caller.EnvironmentID) {
+		env = caller.EnvironmentID
+	}
 	if !h.allowed(r, caller, env, tenant.CapDeploymentsRegister) {
 		errJSON(w, r, 403, "FORBIDDEN", "Deployment registration is not permitted")
 		return
@@ -57,6 +60,9 @@ func (h *HTTPHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := r.URL.Query().Get("environment")
+	if caller.Type == tenant.IdentityTypeMachine && (env == caller.EnvironmentName || env == caller.EnvironmentID) {
+		env = caller.EnvironmentID
+	}
 	var in struct {
 		DeploymentID      string `json:"deploymentId"`
 		ExpectedRevision  *int64 `json:"expectedRevision"`
