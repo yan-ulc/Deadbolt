@@ -106,6 +106,7 @@ curl -fs http://127.0.0.1:8080/livez >/dev/null || compose_logs_and_fail
 curl -fs http://127.0.0.1:8080/dashboard/ >/dev/null || compose_logs_and_fail
 curl -fs http://127.0.0.1:8080/dashboard/index.js >/dev/null || compose_logs_and_fail
 curl -fs http://127.0.0.1:8080/dashboard/styles.css >/dev/null || compose_logs_and_fail
+node scripts/verify-dashboard-esm.mjs http://127.0.0.1:8080/dashboard || compose_logs_and_fail
 compose exec -T control-plane /usr/local/bin/control-plane --migrate
 READYZ_OK=false
 for i in $(seq 1 15); do

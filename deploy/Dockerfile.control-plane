@@ -6,7 +6,7 @@ FROM docker.io/library/node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867af
 
 WORKDIR /src
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/dashboard/package.json apps/dashboard/package.json
 RUN corepack enable && pnpm install --frozen-lockfile --filter @runtime/dashboard
 

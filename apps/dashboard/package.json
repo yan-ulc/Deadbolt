@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc && cp -r public/* dist/ 2>/dev/null || true",
+    "build": "tsc && (cp -r public/* dist/ 2>/dev/null || true)",
     "test": "node ../../scripts/run-node-tests.mjs tests",
     "typecheck": "tsc --noEmit"
   },

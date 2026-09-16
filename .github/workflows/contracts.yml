@@ -108,6 +108,7 @@ jobs:
           curl -fs http://127.0.0.1:8080/dashboard/ >/dev/null || (docker compose -f deploy/compose/docker-compose.yml --profile core logs && exit 1)
           curl -fs http://127.0.0.1:8080/dashboard/index.js >/dev/null || (docker compose -f deploy/compose/docker-compose.yml --profile core logs && exit 1)
           curl -fs http://127.0.0.1:8080/dashboard/styles.css >/dev/null || (docker compose -f deploy/compose/docker-compose.yml --profile core logs && exit 1)
+          node scripts/verify-dashboard-esm.mjs http://127.0.0.1:8080/dashboard || (docker compose -f deploy/compose/docker-compose.yml --profile core logs && exit 1)
           # Execute migrations using in-container migrator runner
           docker compose -f deploy/compose/docker-compose.yml --profile core exec -T control-plane /usr/local/bin/control-plane --migrate
           # Verify readyz returned 200 OK after schema is current
