@@ -23,10 +23,13 @@ Every step adheres to **Blueprint §4, §6, §12, §14, §20, §22, §24** and *
 - **Docker & Docker Compose** (for running local control-plane and broker services)
 
 Install the Deadbolt CLI:
+
 ```bash
 go build -o /usr/local/bin/runtime ./cmd/runtime/main.go
 ```
+
 Verify the installation:
+
 ```bash
 runtime --help
 ```
@@ -43,6 +46,7 @@ cd ./order-service
 ```
 
 This creates:
+
 - `deadbolt.config.json`: Non-secret project configuration (name, default workflow, required secret names).
 - `workflow.json`: Declarative DAG workflow specification (`validate` → `provision` → `notify`) with explicit JSON Pointer input/output mappings.
 - `tasks.json`: Task contract definitions with JSON schemas and explicit recovery policies (`safe` or `idempotent`).
@@ -61,6 +65,7 @@ runtime dev
 ```
 
 Key local mode characteristics:
+
 - **Account-free & loopback-restricted:** Runs strictly on `127.0.0.1:8080`.
 - **Zero cloud telemetry:** Leaks no customer data or telemetry outside the local host.
 - **Auto-terminating:** Press `Ctrl+C` to gracefully drain running tasks and stop all containers.
@@ -76,10 +81,12 @@ runtime build --dir . --arch arm64 --os linux
 ```
 
 Output:
+
 - `dist/manifest.json`: Strictly validated against `contracts/manifest/deployment.schema.json`.
 - `bundles/<bundleDigest>.tar`: Deterministic archive with sorted tar headers and clamped timestamps.
 
 Key outputs:
+
 - **Bundle Digest (SHA-256):** `sha256(bundle.tar)` pinned identity.
 - **Dependency Lock Digest (SHA-256):** Deterministic lock hash.
 
@@ -94,6 +101,7 @@ runtime doctor --manifest ./dist/manifest.json --bundle-dir ./bundles
 ```
 
 The doctor command verifies:
+
 - Docker daemon availability.
 - Node.js runtime toolchain conformance (Node 24.x).
 - Control plane `/livez` and `/readyz` health endpoints.
@@ -109,16 +117,19 @@ The doctor command verifies:
 Authenticate the CLI against your Deadbolt control plane:
 
 ### Interactive Browser Login (PKCE OAuth)
+
 ```bash
 runtime login --url https://api.deadbolt.cloud
 ```
 
 ### Headless / API Key Authentication
+
 ```bash
 runtime login --url https://api.deadbolt.cloud --api-key <YOUR_ADMIN_KEY> --org <ORG_ID> --env staging
 ```
 
 Credentials are automatically stored in:
+
 1. **OS Keychain:** macOS Keychain (`security`) or Linux Secret Service (`secret-tool`).
 2. **Encrypted Local Fallback:** `~/.deadbolt/credentials.json` (encrypted with host-derived machine key, file mode `0600`, directory mode `0700`).
 
@@ -142,6 +153,7 @@ runtime deploy --env staging --manifest ./dist/manifest.json
 Deadbolt uses Ed25519 cryptographic challenge-response nonces for mutual authentication.
 
 ### Step 7a: Enroll Worker 1 & Worker 2
+
 ```bash
 # Enroll Worker 1
 runtime worker enroll --key-path ~/.deadbolt/worker1.key --env staging --create-token
@@ -153,6 +165,7 @@ runtime worker enroll --key-path ~/.deadbolt/worker2.key --env staging --create-
 This generates an Ed25519 keypair, signs the single-use challenge nonce from `/worker/v1/challenge`, binds the public key to the environment pool, and writes key/identity files with `0600` permissions.
 
 ### Step 7b: Start Worker 1 & Worker 2 Agents
+
 ```bash
 # Terminal 1: Worker 1
 runtime worker start --key-path ~/.deadbolt/worker1.key --bundle-dir ./bundles --slots 2
@@ -162,11 +175,13 @@ runtime worker start --key-path ~/.deadbolt/worker2.key --bundle-dir ./bundles -
 ```
 
 ### Step 7c: Verify Active Workers
+
 ```bash
 runtime worker list --env staging
 ```
 
 Expected output:
+
 ```text
 WORKER ID                             POOL     STATUS  DEPLOYMENTS
 baa5c105-b3fb-41d6-a0a0-e6ab3f67f9f3  default  ACTIVE  b08aa9dba0b518aafaeafcb8e47bf4a32014a005c072e823d83593e284473879
@@ -184,6 +199,7 @@ runtime deployments activate <DEPLOYMENT_ID> --workflow customer-onboarding --en
 ```
 
 ### Activation Preflight Enforcement
+
 - **Strict High-Availability Rule:** Activation requires at least **2 compatible online workers** advertising the deployment's bundle digest.
 - **Development Exception:** In non-production environments with only 1 worker online, pass `--allow-single-worker` (a failover recovery warning will be displayed).
 - If 0 compatible workers are online, activation fails closed with `409 WORKER_PREFLIGHT_FAILED`.
@@ -215,6 +231,7 @@ runtime runs list --env staging --limit 10
 ```
 
 Output:
+
 ```text
 RUN ID                                WORKFLOW             STATUS     REASON  CREATED AT
 4b51cf6b-9de6-4cce-ad27-c5a3d8c6bb2a  customer-onboarding  SUCCEEDED  -       2026-09-16T14:26:46Z
@@ -231,6 +248,7 @@ runtime runs inspect <RUN_ID>
 ```
 
 Output:
+
 ```text
 Run ID:              4b51cf6b-9de6-4cce-ad27-c5a3d8c6bb2a
 Workflow:            customer-onboarding
@@ -266,12 +284,14 @@ runtime logs <RUN_ID>
 ```
 
 Filter logs by specific step or attempt:
+
 ```bash
 runtime logs <RUN_ID> --step <STEP_ID>
 runtime logs <RUN_ID> --attempt <ATTEMPT_ID>
 ```
 
 Example output:
+
 ```text
 [14:26:47.000] [INFO ] #1 {"timestamp":"...","level":"INFO","attemptId":"...","message":"Starting task execution","meta":[{"taskName":"tasks/validate.js"}]}
 [14:26:47.000] [INFO ] #2 {"timestamp":"...","level":"INFO","attemptId":"...","message":"Validating signup request","meta":[{"email":"alice@example.com"}]}
@@ -291,6 +311,7 @@ To run this entire sequence automatically with a single script:
 ```
 
 The script automatically:
+
 1. Validates prerequisites with `runtime doctor`.
 2. Assembles bundle and manifest with `runtime build`.
 3. Registers manifest with `runtime deploy`.
