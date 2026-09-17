@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Ryanakml/Deadbolt/internal/storage"
@@ -103,11 +106,98 @@ func (h *BFFHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/auth/login", h.HandleLogin)
 	mux.HandleFunc("/api/auth/callback", h.HandleCallback)
+	mux.HandleFunc("/api/auth/cli/config", h.HandleCLIConfig)
+	mux.HandleFunc("/api/auth/cli/token", h.HandleCLIToken)
 	mux.Handle("/api/auth/session", h.RequireAuth(http.HandlerFunc(h.HandleGetSession)))
 	mux.Handle("/api/auth/switch-org", h.RequireAuth(h.RequireCSRFAndOrigin(http.HandlerFunc(h.HandleSwitchOrg))))
 	mux.Handle("/api/auth/logout", h.RequireAuth(h.RequireCSRFAndOrigin(http.HandlerFunc(h.HandleLogout))))
 
 	return h.CORSMiddleware(mux)
+}
+
+// HandleCLIConfig exposes only public OAuth metadata for the separately
+// registered native CLI client. Its absence must never affect dashboard BFF.
+func (h *BFFHandler) HandleCLIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteSanitizedError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		return
+	}
+	if h.cfg.OIDC.CLIClientID == "" {
+		WriteSanitizedError(w, http.StatusServiceUnavailable, "CLI_OIDC_NOT_CONFIGURED", "Hosted CLI login is not configured")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"issuer": h.cfg.OIDC.Issuer, "clientId": h.cfg.OIDC.CLIClientID})
+}
+
+// HandleCLIToken exchanges a PKCE-bound public-client code and returns a
+// namespaced human CLI bearer session, never a browser cookie or API key.
+func (h *BFFHandler) HandleCLIToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteSanitizedError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		return
+	}
+	if h.cfg.OIDC.CLIClientID == "" {
+		WriteSanitizedError(w, http.StatusServiceUnavailable, "CLI_OIDC_NOT_CONFIGURED", "Hosted CLI login is not configured")
+		return
+	}
+	var in struct {
+		Code         string `json:"code"`
+		CodeVerifier string `json:"code_verifier"`
+		RedirectURI  string `json:"redirect_uri"`
+		Nonce        string `json:"nonce"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Code == "" || in.CodeVerifier == "" || in.Nonce == "" || !validCLILoopbackRedirect(in.RedirectURI) {
+		WriteSanitizedError(w, http.StatusBadRequest, "INVALID_CLI_OIDC_REQUEST", "A PKCE code, verifier, nonce, and loopback redirect URI are required")
+		return
+	}
+	identity, err := h.oidc.ExchangePublicCode(r.Context(), in.Code, in.CodeVerifier, in.RedirectURI, in.Nonce, h.cfg.OIDC.CLIClientID)
+	if err != nil {
+		h.logSecurityEvent("CLI_OIDC_EXCHANGE_FAILED", r, ReasonTokenVerificationFailed)
+		WriteSanitizedError(w, http.StatusUnauthorized, "OIDC_VERIFICATION_FAILED", "CLI authorization code exchange failed")
+		return
+	}
+	user, err := h.store.GetOrCreateUserFromOIDC(r.Context(), identity)
+	if err != nil {
+		WriteSanitizedError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to persist user identity")
+		return
+	}
+	memberships, err := storage.DiscoverUserMemberships(r.Context(), h.pool, user.ID)
+	if err != nil {
+		WriteSanitizedError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to discover user memberships")
+		return
+	}
+	var orgID *string
+	if len(memberships) > 0 {
+		orgID = &memberships[0].OrganizationID
+	}
+	_, token, err := h.store.CreateCLISession(r.Context(), user.ID, orgID, r.RemoteAddr, r.UserAgent(), h.cfg.SessionIdleTimeout, h.cfg.SessionAbsoluteTimeout)
+	if err != nil {
+		WriteSanitizedError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to create CLI session")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"access_token": token, "token_type": "Bearer", "organization_id": valueOrEmpty(orgID)})
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func validCLILoopbackRedirect(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Path != "/callback" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil || host != "127.0.0.1" {
+		return false
+	}
+	p, err := strconv.Atoi(port)
+	return err == nil && p >= 1024 && p <= 65535
 }
 
 // CORSMiddleware enforces strict allowlisted CORS for cross-origin requests

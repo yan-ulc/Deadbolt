@@ -1,0 +1,52 @@
+name: deadbolt
+
+services:
+  postgres:
+    image: postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: deadbolt
+      POSTGRES_USER: deadbolt_system
+      POSTGRES_PASSWORD: localdevpassword
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["deadbolt_postgres_data:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deadbolt_system"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  nats:
+    image: nats:2-alpine@sha256:ad7a43eb7e3337c3c38ce5d784d1461791f95f730f252d2b25eee699752a0ca3
+    command: ["-js", "-sd", "/data"]
+    ports: ["127.0.0.1:4222:4222"]
+    volumes: ["deadbolt_nats_data:/data"]
+
+  minio:
+    image: quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: deadbolt
+      MINIO_ROOT_PASSWORD: localdevpassword
+    volumes: ["deadbolt_minio_data:/data"]
+
+  control-plane:
+    image: ${DEADBOLT_CONTROL_PLANE_IMAGE:?release.json supplies an immutable control-plane image}
+    environment:
+      RUNTIME_MODE: local
+      DEV_AUTH_ENABLED: "true"
+      DEADBOLT_CONTAINER_LOCAL: "true"
+      COOKIE_SECURE: "false"
+      LISTEN_ADDR: "0.0.0.0:8080"
+      DATABASE_URL: postgres://deadbolt_system:localdevpassword@postgres:5432/deadbolt?sslmode=disable
+      MIGRATOR_DATABASE_URL: postgres://deadbolt_system:localdevpassword@postgres:5432/deadbolt?sslmode=disable
+      NATS_URL: nats://nats:4222
+      DEADBOLT_ALLOWED_ORIGINS: http://127.0.0.1:8080
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  deadbolt_postgres_data:
+  deadbolt_nats_data:
+  deadbolt_minio_data:

@@ -131,6 +131,7 @@ func run() error {
 			ClientID:     os.Getenv("DEADBOLT_OIDC_CLIENT_ID"),
 			ClientSecret: os.Getenv("DEADBOLT_OIDC_CLIENT_SECRET"),
 			RedirectURL:  os.Getenv("DEADBOLT_OIDC_REDIRECT_URL"),
+			CLIClientID:  os.Getenv("DEADBOLT_OIDC_CLI_CLIENT_ID"),
 		},
 	}
 

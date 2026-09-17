@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -12,8 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/Ryanakml/Deadbolt/internal/worker"
 )
 
 // RunDev handles "runtime dev [--no-worker] [--bundle-dir <dir>] [--compose-file <path>] [--control-plane-url <url>] [--pool <pool>]"
@@ -38,9 +36,37 @@ func RunDev(args []string) error {
 		return fmt.Errorf("docker check failed: %w\n  Remediation:\n    Ensure Docker daemon is installed and running (`docker info`).\n    Local mode requires Docker to orchestrate database and control plane services", err)
 	}
 
-	// 2. Locate docker-compose.yml
+	// 2. Locate docker-compose.yml. A distributed CLI resolves the canonical
+	// companion asset next to the installed binary; repository-relative paths
+	// remain a developer convenience only.
 	composePath := *composeFileFlag
 	if composePath == "" {
+		if configured := os.Getenv("DEADBOLT_COMPOSE_FILE"); configured != "" {
+			composePath = configured
+		}
+	}
+	var releaseImage string
+	if composePath == "" {
+		if executable, err := os.Executable(); err == nil {
+			assetDir := filepath.Join(filepath.Dir(executable), "..", "share", "deadbolt")
+			candidate := filepath.Join(assetDir, "compose.yaml")
+			if _, err := os.Stat(candidate); err == nil {
+				composePath = candidate
+				metadata, err := os.ReadFile(filepath.Join(assetDir, "release.json"))
+				if err != nil {
+					return fmt.Errorf("read installed Deadbolt release metadata: %w", err)
+				}
+				var release struct {
+					ControlPlaneImage string `json:"controlPlaneImage"`
+				}
+				if err := json.Unmarshal(metadata, &release); err != nil || !strings.Contains(release.ControlPlaneImage, "@sha256:") {
+					return fmt.Errorf("installed Deadbolt release metadata has no immutable control-plane image")
+				}
+				releaseImage = release.ControlPlaneImage
+			}
+		}
+	}
+	if composePath == "" && os.Getenv("DEADBOLT_DEV_ASSETS") == "1" {
 		candidates := []string{
 			"deploy/compose/docker-compose.yml",
 			"../deploy/compose/docker-compose.yml",
@@ -54,22 +80,38 @@ func RunDev(args []string) error {
 		}
 	}
 	if composePath == "" {
-		return fmt.Errorf("could not locate deploy/compose/docker-compose.yml. Pass --compose-file <path>")
+		return fmt.Errorf("local Compose assets are not installed. Install the Deadbolt CLI companion assets, set DEADBOLT_COMPOSE_FILE, or for a repository checkout set DEADBOLT_DEV_ASSETS=1")
 	}
 
 	// 3. Start core services with docker compose
 	fmt.Printf("==> Step 2/5: Starting local core services via Docker Compose (%s)...\n", composePath)
 	composeCmd := exec.Command("docker", "compose", "-f", composePath, "--profile", "core", "up", "-d")
+	if releaseImage != "" {
+		composeCmd.Env = append(os.Environ(), "DEADBOLT_CONTROL_PLANE_IMAGE="+releaseImage)
+	}
 	composeCmd.Stdout = os.Stdout
 	composeCmd.Stderr = os.Stderr
 	if err := composeCmd.Run(); err != nil {
 		return fmt.Errorf("failed to start core containers via docker compose: %w", err)
 	}
 
-	// 4. Wait for control plane readiness
-	fmt.Printf("==> Step 3/5: Waiting for Deadbolt control plane at %s to become healthy...\n", apiURL)
-	if err := waitForControlPlane(apiURL, 60*time.Second); err != nil {
-		return fmt.Errorf("control plane did not become ready: %w", err)
+	// A fresh database is intentionally unready before schema migration. Match
+	// the production Compose lifecycle: live -> migrator -> ready.
+	fmt.Printf("==> Step 3/5: Waiting for Deadbolt control plane at %s to become live...\n", apiURL)
+	if err := waitForControlPlanePath(apiURL, "/livez", 60*time.Second); err != nil {
+		return fmt.Errorf("control plane did not become live: %w", err)
+	}
+	migrateCmd := exec.Command("docker", "compose", "-f", composePath, "--profile", "core", "exec", "-T", "control-plane", "/usr/local/bin/control-plane", "--migrate")
+	if releaseImage != "" {
+		migrateCmd.Env = append(os.Environ(), "DEADBOLT_CONTROL_PLANE_IMAGE="+releaseImage)
+	}
+	migrateCmd.Stdout = os.Stdout
+	migrateCmd.Stderr = os.Stderr
+	if err := migrateCmd.Run(); err != nil {
+		return fmt.Errorf("apply local database migrations: %w", err)
+	}
+	if err := waitForControlPlanePath(apiURL, "/readyz", 60*time.Second); err != nil {
+		return fmt.Errorf("control plane did not become ready after migrations: %w", err)
 	}
 
 	// 5. Authenticate and bootstrap developer entities
@@ -85,53 +127,48 @@ func RunDev(args []string) error {
 	// Reload config to pickup saved credentials
 	cfg = LoadConfig()
 
-	// 6. Worker initialization
-	var workerCancel context.CancelFunc
+	// 6. Worker initialization. Local HA is two distinct runtime worker
+	// processes, not one agent with two slots.
+	var workerProcesses []*exec.Cmd
 	if !*noWorkerFlag {
-		fmt.Println("==> Step 5/5: Enrolling and launching local worker agent...")
-		_ = os.MkdirAll(*bundleDirFlag, 0755)
-
-		credDir, _ := GetCredentialsDirectory()
-		workerKeyPath := filepath.Join(credDir, "worker_dev.key")
-
-		// Enroll worker if key doesn't exist
-		if _, err := os.Stat(workerKeyPath); os.IsNotExist(err) {
-			enrollArgs := []string{
-				"--control-plane-url", apiURL,
-				"--key-path", workerKeyPath,
-				"--pool", *poolFlag,
-				"--env", "development",
-				"--create-token",
-			}
-			if err := HandleWorkerEnroll(enrollArgs); err != nil {
-				fmt.Printf("Warning: automatic worker enrollment encountered: %v. Continuing without local worker\n", err)
-			}
+		fmt.Println("==> Step 5/5: Enrolling and launching two local worker processes...")
+		if err := os.MkdirAll(*bundleDirFlag, 0755); err != nil {
+			return fmt.Errorf("create bundle directory: %w", err)
 		}
 
-		if _, err := os.Stat(workerKeyPath); err == nil {
-			workerCtx, cancel := context.WithCancel(context.Background())
-			workerCancel = cancel
-
-			absBundleDir, _ := filepath.Abs(*bundleDirFlag)
-			wCfg := worker.AgentConfig{
-				ControlPlaneURL: apiURL,
-				KeyPath:         workerKeyPath,
-				BundleDir:       absBundleDir,
-				Pool:            *poolFlag,
-				Slots:           2,
+		credDir, err := GetCredentialsDirectory()
+		if err != nil {
+			return fmt.Errorf("resolve local credentials directory: %w", err)
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve runtime executable: %w", err)
+		}
+		absBundleDir, err := filepath.Abs(*bundleDirFlag)
+		if err != nil {
+			return fmt.Errorf("resolve bundle directory: %w", err)
+		}
+		for _, name := range []string{"worker-a", "worker-b"} {
+			workerKeyPath := filepath.Join(credDir, name+".key")
+			if _, err := os.Stat(workerKeyPath); os.IsNotExist(err) {
+				enrollArgs := []string{
+					"--control-plane-url", apiURL,
+					"--key-path", workerKeyPath,
+					"--pool", *poolFlag,
+					"--env", "development",
+					"--create-token",
+				}
+				if err := HandleWorkerEnroll(enrollArgs); err != nil {
+					return fmt.Errorf("enroll %s: %w", name, err)
+				}
 			}
-
-			agent, err := worker.NewAgent(wCfg)
-			if err != nil {
-				fmt.Printf("Warning: failed to initialize worker agent: %v\n", err)
-			} else {
-				go func() {
-					if err := agent.Start(workerCtx); err != nil && err != context.Canceled {
-						fmt.Printf("[Worker Agent Error]: %v\n", err)
-					}
-				}()
-				fmt.Println("✓ Local worker agent active and polling for assignments.")
+			cmd := exec.Command(executable, "worker", "start", "--key-path", workerKeyPath, "--control-plane-url", apiURL, "--bundle-dir", absBundleDir, "--pool", *poolFlag, "--slots", "1")
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("start %s process: %w", name, err)
 			}
+			workerProcesses = append(workerProcesses, cmd)
+			fmt.Printf("✓ %s process started (pid %d).\n", name, cmd.Process.Pid)
 		}
 	} else {
 		fmt.Println("==> Step 5/5: Skipping local worker start (--no-worker specified).")
@@ -163,9 +200,13 @@ func RunDev(args []string) error {
 	<-sigChan
 
 	fmt.Println("\nReceived shutdown signal. Stopping local services gracefully...")
-	if workerCancel != nil {
-		workerCancel()
-		time.Sleep(500 * time.Millisecond)
+	for _, process := range workerProcesses {
+		if process.Process != nil {
+			_ = process.Process.Signal(os.Interrupt)
+		}
+	}
+	for _, process := range workerProcesses {
+		_ = process.Wait()
 	}
 
 	fmt.Println("Shutdown complete.")
@@ -181,11 +222,15 @@ func checkDockerRunning() error {
 }
 
 func waitForControlPlane(apiURL string, timeout time.Duration) error {
+	return waitForControlPlanePath(apiURL, "/readyz", timeout)
+}
+
+func waitForControlPlanePath(apiURL, path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 2 * time.Second}
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(apiURL + "/readyz")
+		resp, err := client.Get(apiURL + path)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -195,5 +240,5 @@ func waitForControlPlane(apiURL string, timeout time.Duration) error {
 		time.Sleep(1 * time.Second)
 	}
 
-	return fmt.Errorf("timed out after %s waiting for %s/readyz", timeout, apiURL)
+	return fmt.Errorf("timed out after %s waiting for %s%s", timeout, apiURL, path)
 }

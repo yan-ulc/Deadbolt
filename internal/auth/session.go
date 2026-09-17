@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -208,6 +209,24 @@ func (s *SessionStore) CreateSession(
 	}
 
 	return &sess, rawSessionToken, rawCSRFToken, nil
+}
+
+// CreateCLISession creates a distinct non-cookie human credential. Only the
+// unprefixed random token hash is persisted; the dbcli_ namespace prevents a
+// dashboard cookie session from ever being accepted as a Bearer credential.
+func (s *SessionStore) CreateCLISession(ctx context.Context, userID string, activeOrgID *string, ipAddress, userAgent string, idleTimeout, absoluteTimeout time.Duration) (*Session, string, error) {
+	sess, raw, _, err := s.CreateSession(ctx, userID, activeOrgID, ipAddress, userAgent, idleTimeout, absoluteTimeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return sess, "dbcli_" + raw, nil
+}
+
+func (s *SessionStore) ValidateCLISession(ctx context.Context, token string, idleTimeout time.Duration) (*Session, error) {
+	if !strings.HasPrefix(token, "dbcli_") {
+		return nil, ErrSessionNotFound
+	}
+	return s.ValidateSession(ctx, strings.TrimPrefix(token, "dbcli_"), idleTimeout)
 }
 
 // ValidateSession validates the raw session token against DB revocation and idle/absolute expiry

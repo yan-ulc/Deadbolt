@@ -193,6 +193,19 @@ func (h *HTTPHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			rawKey := strings.TrimPrefix(authHeader, "Bearer ")
+			if strings.HasPrefix(rawKey, "dbcli_") {
+				sess, err := h.sessionStore.ValidateCLISession(ctx, rawKey, h.authCfg.SessionIdleTimeout)
+				if err != nil || sess == nil {
+					writeJSONError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Invalid or expired CLI session")
+					return
+				}
+				caller := &CallerIdentity{Type: IdentityTypeHuman, UserID: sess.UserID}
+				if sess.ActiveOrganizationID != nil {
+					caller.OrganizationID = *sess.ActiveOrganizationID
+				}
+				next.ServeHTTP(w, r.WithContext(ContextWithCaller(ctx, caller)))
+				return
+			}
 			apiKey, err := h.service.AuthenticateAPIKey(ctx, rawKey)
 			if err != nil {
 				var revokedErr *RevokedKeyError

@@ -62,9 +62,7 @@ cd "$SCRIPT_DIR"
 # Step 1: System and environment diagnostics
 echo ""
 echo "==> Step 1: Running system preflight checks"
-$RUNTIME doctor --dir . || {
-    echo "[INFO] Doctor completed with advisory warnings. Continuing with demonstration."
-}
+$RUNTIME doctor
 
 # Step 2: Build immutable deployment bundle and manifest
 echo ""

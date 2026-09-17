@@ -36,6 +36,9 @@ func RunLogin(args []string) error {
 	cfg := LoadConfig()
 	if *cpURLFlag != "" {
 		cfg.APIURL = strings.TrimRight(*cpURLFlag, "/")
+		if err := StoreControlPlaneURL(cfg.APIURL); err != nil {
+			return fmt.Errorf("save control plane endpoint: %w", err)
+		}
 	}
 
 	// 1. Direct API key provisioning
@@ -44,10 +47,14 @@ func RunLogin(args []string) error {
 			return fmt.Errorf("failed to save API key to secure credentials store: %w", err)
 		}
 		if *orgFlag != "" {
-			_ = StoreCredential("deadbolt", "org_id", *orgFlag)
+			if err := StoreCredential("deadbolt", "org_id", *orgFlag); err != nil {
+				return err
+			}
 		}
 		if *envFlag != "" {
-			_ = StoreCredential("deadbolt", "env", *envFlag)
+			if err := StoreCredential("deadbolt", "env", *envFlag); err != nil {
+				return err
+			}
 		}
 		fmt.Println("✓ API key securely saved to credentials store.")
 		if *orgFlag != "" {
@@ -169,6 +176,9 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 		r.Header.Set("Origin", cfg.APIURL)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Accept", "application/json")
+		if method != http.MethodGet && method != http.MethodHead {
+			r.Header.Set("Idempotency-Key", fmt.Sprintf("local-bootstrap-%d", time.Now().UnixNano()))
+		}
 
 		res, err := client.Do(r)
 		if err != nil {
@@ -189,7 +199,7 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 
 	// If user has no active organization, create one
 	if orgID == "" {
-		res, resBody, err := doAuthReq("POST", "/organizations", map[string]string{"name": "Local Development Org"})
+		res, resBody, err := doAuthReq("POST", "/v1/organizations", map[string]string{"name": "Local Development Org"})
 		if err == nil && (res.StatusCode == http.StatusOK || res.StatusCode == http.StatusCreated) {
 			var newOrg struct {
 				ID string `json:"id"`
@@ -201,6 +211,9 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 			}
 		}
 	}
+	if orgID == "" {
+		return fmt.Errorf("local bootstrap did not create or select an organization")
+	}
 
 	targetEnv := "development"
 	if customEnv != "" {
@@ -209,11 +222,13 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 
 	// Try to ensure project, environment, and an API key for CLI operations
 	if orgID != "" {
-		_ = StoreCredential("deadbolt", "org_id", orgID)
+		if err := StoreCredential("deadbolt", "org_id", orgID); err != nil {
+			return err
+		}
 
 		// List or create project
 		var projectID string
-		res, resBody, err := doAuthReq("GET", "/projects", nil)
+		res, resBody, err := doAuthReq("GET", "/v1/projects", nil)
 		if err == nil && res.StatusCode == http.StatusOK {
 			var prjList struct {
 				Projects []struct {
@@ -227,7 +242,7 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 		}
 
 		if projectID == "" {
-			res, resBody, err := doAuthReq("POST", "/projects", map[string]string{"name": "default"})
+			res, resBody, err := doAuthReq("POST", "/v1/projects", map[string]string{"name": "default"})
 			if err == nil && (res.StatusCode == http.StatusOK || res.StatusCode == http.StatusCreated) {
 				var newPrj struct {
 					ID string `json:"id"`
@@ -241,7 +256,7 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 		if projectID != "" {
 			// Find or create environment
 			var envID string
-			res, resBody, err := doAuthReq("GET", fmt.Sprintf("/projects/%s/environments", projectID), nil)
+			res, resBody, err := doAuthReq("GET", fmt.Sprintf("/v1/projects/%s/environments", projectID), nil)
 			if err == nil && res.StatusCode == http.StatusOK {
 				var envList struct {
 					Environments []struct {
@@ -260,7 +275,7 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 			}
 
 			if envID == "" {
-				res, resBody, err := doAuthReq("POST", fmt.Sprintf("/projects/%s/environments", projectID), map[string]any{
+				res, resBody, err := doAuthReq("POST", fmt.Sprintf("/v1/projects/%s/environments", projectID), map[string]any{
 					"name":            targetEnv,
 					"max_concurrency": 10,
 				})
@@ -276,23 +291,29 @@ func runLocalDevLogin(cfg Config, email string, customOrg string, customEnv stri
 
 			// Generate an API key for CLI commands if env exists
 			if envID != "" {
-				res, resBody, err := doAuthReq("POST", fmt.Sprintf("/environments/%s/api-keys", envID), map[string]any{
-					"capabilities": []string{"*"},
+				res, resBody, err := doAuthReq("POST", fmt.Sprintf("/v1/environments/%s/api-keys", envID), map[string]any{
+					"capabilities": []string{"deployments:register", "deployments:write", "deployments:activate:staging", "runs:create", "runs:read", "payload:read", "workers:read", "workers:drain"},
 					"expiry_days":  365,
 				})
 				if err == nil && (res.StatusCode == http.StatusOK || res.StatusCode == http.StatusCreated) {
 					var keyResp struct {
-						PlaintextKey string `json:"plaintext_key"`
+						PlaintextKey string `json:"plaintextKey"`
 					}
 					if err := json.Unmarshal(resBody, &keyResp); err == nil && keyResp.PlaintextKey != "" {
-						_ = StoreCredential("deadbolt", "api_key", keyResp.PlaintextKey)
+						if err := StoreCredential("deadbolt", "api_key", keyResp.PlaintextKey); err != nil {
+							return err
+						}
 					}
 				}
 			}
 		}
 	}
-
-	_ = StoreCredential("deadbolt", "env", targetEnv)
+	if err := StoreCredential("deadbolt", "env", targetEnv); err != nil {
+		return err
+	}
+	if _, err := GetCredential("deadbolt", "api_key"); err != nil {
+		return fmt.Errorf("local bootstrap did not create a usable API key: %w", err)
+	}
 
 	fmt.Println("✓ Successfully authenticated to local Deadbolt environment.")
 	fmt.Printf("  User:         %s\n", email)
@@ -321,13 +342,27 @@ func runHostedBrowserLogin(cfg Config, customOrg string, customEnv string) error
 	port := listener.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
-	authURL := fmt.Sprintf("%s/api/auth/login?response_type=code&client_id=deadbolt-cli&redirect_uri=%s&code_challenge=%s&code_challenge_method=%s&state=%s",
-		cfg.APIURL,
-		url.QueryEscape(redirectURI),
-		url.QueryEscape(pkce.CodeChallenge),
-		url.QueryEscape(pkce.CodeChallengeMethod),
-		url.QueryEscape(pkce.State),
-	)
+	metadataResp, err := http.Get(cfg.APIURL + "/api/auth/cli/config")
+	if err != nil {
+		return fmt.Errorf("fetch hosted CLI OIDC configuration: %w", err)
+	}
+	defer metadataResp.Body.Close()
+	metadataBody, _ := io.ReadAll(metadataResp.Body)
+	if metadataResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("hosted CLI login unavailable: %s", FormatAPIError(metadataResp.StatusCode, metadataBody))
+	}
+	var metadata struct {
+		Issuer   string `json:"issuer"`
+		ClientID string `json:"clientId"`
+	}
+	if err := json.Unmarshal(metadataBody, &metadata); err != nil || metadata.Issuer == "" || metadata.ClientID == "" {
+		return fmt.Errorf("invalid hosted CLI OIDC configuration")
+	}
+	publicOIDC := auth.NewOIDCClient(auth.OIDCConfig{Issuer: metadata.Issuer, ClientID: metadata.ClientID, RedirectURL: redirectURI}, nil)
+	authURL, err := publicOIDC.BuildAuthorizationURL(context.Background(), pkce)
+	if err != nil {
+		return fmt.Errorf("build hosted OIDC authorization URL: %w", err)
+	}
 
 	fmt.Println("Opening your browser for Deadbolt authentication...")
 	fmt.Printf("If the browser does not open automatically, visit:\n\n  %s\n\n", authURL)
@@ -391,17 +426,12 @@ func runHostedBrowserLogin(cfg Config, customOrg string, customEnv string) error
 
 	_ = server.Shutdown(context.Background())
 
-	// Exchange code for session / token
-	tokenURL := fmt.Sprintf("%s/api/auth/token", cfg.APIURL)
-	tokenData := url.Values{}
-	tokenData.Set("grant_type", "authorization_code")
-	tokenData.Set("code", code)
-	tokenData.Set("code_verifier", pkce.CodeVerifier)
-	tokenData.Set("redirect_uri", redirectURI)
-	tokenData.Set("client_id", "deadbolt-cli")
-
+	// The control plane performs the public-client exchange and issues a distinct
+	// dbcli_ human bearer session after signature/audience/nonce verification.
+	tokenURL := fmt.Sprintf("%s/api/auth/cli/token", cfg.APIURL)
+	tokenData, _ := json.Marshal(map[string]string{"code": code, "code_verifier": pkce.CodeVerifier, "redirect_uri": redirectURI, "nonce": pkce.Nonce})
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.PostForm(tokenURL, tokenData)
+	resp, err := client.Post(tokenURL, "application/json", bytes.NewReader(tokenData))
 	if err != nil {
 		return fmt.Errorf("failed to exchange authorization code: %w", err)
 	}
@@ -414,7 +444,6 @@ func runHostedBrowserLogin(cfg Config, customOrg string, customEnv string) error
 
 	var tokenResp struct {
 		AccessToken    string `json:"access_token"`
-		APIKey         string `json:"api_key"`
 		OrganizationID string `json:"organization_id"`
 		Environment    string `json:"environment"`
 	}
@@ -422,10 +451,7 @@ func runHostedBrowserLogin(cfg Config, customOrg string, customEnv string) error
 		return fmt.Errorf("failed to parse token exchange response: %w", err)
 	}
 
-	tokenToStore := tokenResp.APIKey
-	if tokenToStore == "" {
-		tokenToStore = tokenResp.AccessToken
-	}
+	tokenToStore := tokenResp.AccessToken
 	if tokenToStore != "" {
 		_ = StoreCredential("deadbolt", "api_key", tokenToStore)
 	}

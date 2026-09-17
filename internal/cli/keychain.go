@@ -54,7 +54,8 @@ func getCredentialsFilePath() (string, error) {
 	return filepath.Join(dir, "credentials.json"), nil
 }
 
-// StoreCredential saves a credential to the OS keychain or fallback secure storage with 0600 permissions.
+// StoreCredential saves a credential to the native OS keychain. File storage is
+// deliberately restricted to explicitly configured test/local-fixture directories.
 func StoreCredential(service, account, secret string) error {
 	// If custom directory or test environment is set, use secure file directly to avoid polluting system keychain
 	if customCredentialsDir != "" || os.Getenv("DEADBOLT_CREDENTIALS_DIR") != "" {
@@ -63,10 +64,11 @@ func StoreCredential(service, account, secret string) error {
 
 	if runtime.GOOS == "darwin" {
 		cmd := exec.Command("security", "add-generic-password", "-s", service, "-a", account, "-w", secret, "-U")
-		if err := cmd.Run(); err == nil {
+		err := cmd.Run()
+		if err == nil {
 			return nil
 		}
-		// Fallback to secure file if security CLI fails (e.g., headless/SSH)
+		return fmt.Errorf("macOS Keychain is unavailable; hosted credentials are not written to disk: %w", err)
 	} else if runtime.GOOS == "linux" {
 		if _, err := exec.LookPath("secret-tool"); err == nil {
 			cmd := exec.Command("secret-tool", "store", "--label="+service, "service", service, "account", account)
@@ -74,10 +76,12 @@ func StoreCredential(service, account, secret string) error {
 			if err := cmd.Run(); err == nil {
 				return nil
 			}
+			return fmt.Errorf("Linux Secret Service is unavailable; hosted credentials are not written to disk")
 		}
+		return fmt.Errorf("secret-tool is required for hosted credentials on Linux; install a Secret Service provider")
 	}
 
-	return storeFileCredential(service, account, secret)
+	return fmt.Errorf("no supported native credential store for %s", runtime.GOOS)
 }
 
 // GetCredential retrieves a credential from the OS keychain or fallback secure storage.
@@ -102,7 +106,7 @@ func GetCredential(service, account string) (string, error) {
 		}
 	}
 
-	return getFileCredential(service, account)
+	return "", fmt.Errorf("native credential store is unavailable: %w", ErrCredentialNotFound)
 }
 
 // DeleteCredential removes a credential from the OS keychain or fallback secure storage.
@@ -121,7 +125,7 @@ func DeleteCredential(service, account string) error {
 		}
 	}
 
-	return deleteFileCredential(service, account)
+	return nil
 }
 
 func storeFileCredential(service, account, secret string) error {

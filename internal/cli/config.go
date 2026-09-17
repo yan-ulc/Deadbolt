@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,10 @@ type Config struct {
 	OrgID  string
 	Env    string
 	JSON   bool
+}
+
+type profile struct {
+	APIURL string `json:"apiURL"`
 }
 
 // ProjectConfig captures deadbolt.config.json options
@@ -35,6 +40,11 @@ type ProjectConfig struct {
 // 4. Baseline defaults
 func LoadConfig() Config {
 	apiURL := os.Getenv("DEADBOLT_API_URL")
+	if apiURL == "" {
+		if saved, err := loadProfile(); err == nil {
+			apiURL = saved.APIURL
+		}
+	}
 	if apiURL == "" {
 		apiURL = "http://localhost:8080"
 	}
@@ -78,6 +88,43 @@ func LoadConfig() Config {
 		OrgID:  orgID,
 		Env:    env,
 	}
+}
+
+// StoreControlPlaneURL persists the non-secret endpoint selected at login. Tokens
+// remain exclusively in the platform credential store.
+func StoreControlPlaneURL(rawURL string) error {
+	u, err := url.ParseRequestURI(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid control plane URL %q", rawURL)
+	}
+	dir, err := getCredentialsDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create CLI profile directory: %w", err)
+	}
+	b, err := json.Marshal(profile{APIURL: strings.TrimRight(rawURL, "/")})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "config.json"), b, 0o600)
+}
+
+func loadProfile() (profile, error) {
+	dir, err := getCredentialsDir()
+	if err != nil {
+		return profile{}, err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return profile{}, err
+	}
+	var p profile
+	if err := json.Unmarshal(b, &p); err != nil {
+		return profile{}, err
+	}
+	return p, nil
 }
 
 // LoadProjectConfig reads deadbolt.config.json if present

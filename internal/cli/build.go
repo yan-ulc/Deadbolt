@@ -133,7 +133,10 @@ func BuildDeployment(opts BuildOptions) (*BuildResult, error) {
 			return nil, fmt.Errorf("read tasks dir: %w", err)
 		}
 		for _, e := range entries {
-			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".js") || strings.HasSuffix(e.Name(), ".mjs") || strings.HasSuffix(e.Name(), ".ts")) {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".ts") {
+				return nil, fmt.Errorf("task %s is TypeScript; M1 bundles execute JavaScript only. Compile it to .js before runtime build", e.Name())
+			}
+			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".js") || strings.HasSuffix(e.Name(), ".mjs")) {
 				p := filepath.Join(tasksDir, e.Name())
 				data, err := os.ReadFile(p)
 				if err != nil {
@@ -156,10 +159,8 @@ func BuildDeployment(opts BuildOptions) (*BuildResult, error) {
 		}
 	}
 
-	// If no task files found, check root for sample task
 	if len(taskFiles) == 0 {
-		sampleCode := []byte("export default async function task(input, ctx) { return { status: 'completed' }; }\n")
-		taskFiles["tasks/task-simple.js"] = sampleCode
+		return nil, fmt.Errorf("no JavaScript task entrypoints found in %s; run runtime init or add tasks/*.js", tasksDir)
 	}
 
 	// 3. Build deterministic tarball: sorted file keys, fixed modtime
@@ -237,179 +238,29 @@ func BuildDeployment(opts BuildOptions) (*BuildResult, error) {
 		workflows = append(workflows, parsedWF)
 	}
 
-	// Fallback to default workflow if not provided
 	if len(workflows) == 0 {
-		workflows = append(workflows, map[string]any{
-			"manifestVersion": 1,
-			"name":            "default-workflow",
-			"inputSchema": map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{"val": map[string]any{"type": "string"}},
-				"required":             []string{"val"},
-				"additionalProperties": false,
-			},
-			"outputSchema": map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{"val": map[string]any{"type": "string"}},
-				"required":             []string{"val"},
-				"additionalProperties": false,
-			},
-			"nodes": []map[string]any{
-				{
-					"id":    "step-1",
-					"type":  "task",
-					"task":  "task-simple",
-					"after": []string{},
-					"input": map[string]any{
-						"val": map[string]any{"$ref": "run.input", "pointer": "/val"},
-					},
-				},
-			},
-			"output": map[string]any{
-				"val": map[string]any{"$ref": "step.output", "stepId": "step-1", "pointer": "/val"},
-			},
-		})
+		return nil, fmt.Errorf("workflow definition is required; add workflow.json or pass --workflow")
 	}
 
 	// Check if tasks.json exists in project dir
 	tasksPath := filepath.Join(opts.ProjectDir, "tasks.json")
-	if fileExists(tasksPath) {
-		tData, err := os.ReadFile(tasksPath)
-		if err == nil {
-			var parsedTasks []any
-			if err := json.Unmarshal(tData, &parsedTasks); err == nil {
-				tasks = append(tasks, parsedTasks...)
-			}
-		}
+	if !fileExists(tasksPath) {
+		return nil, fmt.Errorf("task definition file is required: %s", tasksPath)
 	}
+	tData, err := os.ReadFile(tasksPath)
+	if err != nil {
+		return nil, fmt.Errorf("read task definitions: %w", err)
+	}
+	var parsedTasks []any
+	if err := json.Unmarshal(tData, &parsedTasks); err != nil {
+		return nil, fmt.Errorf("parse task definitions: %w", err)
+	}
+	tasks = append(tasks, parsedTasks...)
 
-	// 6. If tasks.json was not present, build task definitions corresponding to workflow nodes
+	// Task definitions are authored by the project; never infer recovery or
+	// schemas from names or workflow wiring.
 	if len(tasks) == 0 {
-		taskNamesMap := make(map[string]bool)
-		stepToTask := make(map[string]string)
-		taskOutputs := make(map[string]map[string]bool)
-		taskInputs := make(map[string]map[string]bool)
-
-		for _, wfItem := range workflows {
-			if wfMap, ok := wfItem.(map[string]any); ok {
-				if nodes, ok := wfMap["nodes"].([]any); ok {
-					for _, n := range nodes {
-						if nMap, ok := n.(map[string]any); ok {
-							sID, _ := nMap["id"].(string)
-							tName, _ := nMap["task"].(string)
-							if tName != "" {
-								taskNamesMap[tName] = true
-								if sID != "" {
-									stepToTask[sID] = tName
-								}
-								if _, ok := taskOutputs[tName]; !ok {
-									taskOutputs[tName] = make(map[string]bool)
-								}
-								if _, ok := taskInputs[tName]; !ok {
-									taskInputs[tName] = make(map[string]bool)
-								}
-							}
-						}
-					}
-
-					// Collect input references across nodes
-					for _, n := range nodes {
-						if nMap, ok := n.(map[string]any); ok {
-							tName, _ := nMap["task"].(string)
-							if inMap, ok := nMap["input"].(map[string]any); ok {
-								for inKey, inVal := range inMap {
-									if tName != "" {
-										taskInputs[tName][inKey] = true
-									}
-									if refMap, ok := inVal.(map[string]any); ok {
-										if refMap["$ref"] == "step.output" {
-											srcStep, _ := refMap["stepId"].(string)
-											ptr, _ := refMap["pointer"].(string)
-											prop := strings.TrimPrefix(ptr, "/")
-											if srcTask := stepToTask[srcStep]; srcTask != "" && prop != "" {
-												taskOutputs[srcTask][prop] = true
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				// Collect references from workflow output
-				if outMap, ok := wfMap["output"].(map[string]any); ok {
-					for _, outVal := range outMap {
-						if refMap, ok := outVal.(map[string]any); ok {
-							if refMap["$ref"] == "step.output" {
-								srcStep, _ := refMap["stepId"].(string)
-								ptr, _ := refMap["pointer"].(string)
-								prop := strings.TrimPrefix(ptr, "/")
-								if srcTask := stepToTask[srcStep]; srcTask != "" && prop != "" {
-									taskOutputs[srcTask][prop] = true
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		for tName := range taskNamesMap {
-			entrypoint := fmt.Sprintf("tasks/%s.js", tName)
-			for k := range taskFiles {
-				if strings.TrimPrefix(k, "tasks/") == tName+".js" || strings.TrimPrefix(k, "tasks/") == tName+".mjs" {
-					entrypoint = k
-					break
-				}
-			}
-
-			recovery := "safe"
-			var window any
-			if strings.Contains(tName, "email") || strings.Contains(tName, "notify") || strings.Contains(tName, "idempotent") {
-				recovery = "idempotent"
-				window = float64(60000)
-			}
-
-			// Build properties & required for outputSchema
-			outProps := make(map[string]any)
-			outReq := make([]string, 0)
-			for prop := range taskOutputs[tName] {
-				outProps[prop] = map[string]any{"type": "string"}
-				outReq = append(outReq, prop)
-			}
-
-			// Build properties & required for inputSchema
-			inProps := make(map[string]any)
-			inReq := make([]string, 0)
-			for prop := range taskInputs[tName] {
-				inProps[prop] = map[string]any{"type": "string"}
-				inReq = append(inReq, prop)
-			}
-
-			taskObj := map[string]any{
-				"name":       tName,
-				"entrypoint": entrypoint,
-				"recovery":   recovery,
-				"timeoutMs":  float64(30000),
-				"inputSchema": map[string]any{
-					"type":                 "object",
-					"properties":           inProps,
-					"required":             inReq,
-					"additionalProperties": true,
-				},
-				"outputSchema": map[string]any{
-					"type":                 "object",
-					"properties":           outProps,
-					"required":             outReq,
-					"additionalProperties": true,
-				},
-			}
-			if recovery == "idempotent" {
-				taskObj["idempotencyWindowMs"] = window
-			}
-			tasks = append(tasks, taskObj)
-		}
+		return nil, fmt.Errorf("tasks.json must define at least one task")
 	}
 
 	// Deduplicate secret names

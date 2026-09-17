@@ -66,6 +66,7 @@ func handleWorkerEnroll(args []string) error {
 		cpURL = cfg.APIURL
 	}
 	cpURL = strings.TrimRight(cpURL, "/")
+	cfg.APIURL = cpURL
 
 	keyPath := *keyPathFlag
 	if keyPath == "" {
@@ -88,9 +89,13 @@ func handleWorkerEnroll(args []string) error {
 			return fmt.Errorf("--env is required when using --create-token")
 		}
 
+		envID, err := resolveEnvironmentID(cfg, env)
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Requesting worker enrollment token for environment %s (pool: %s)...\n", env, *poolFlag)
 		inPayload, _ := json.Marshal(map[string]string{"pool": *poolFlag})
-		req, err := cfg.NewRequest(http.MethodPost, fmt.Sprintf("/v1/environments/%s/worker-enrollments", env), bytes.NewReader(inPayload))
+		req, err := cfg.NewRequest(http.MethodPost, fmt.Sprintf("/v1/environments/%s/worker-enrollments", envID), bytes.NewReader(inPayload))
 		if err != nil {
 			return fmt.Errorf("create enrollment token request: %w", err)
 		}
@@ -229,7 +234,7 @@ func handleWorkerStart(args []string) error {
 	poolFlag := fs.String("pool", "default", "Worker pool name")
 	slotsFlag := fs.Int("slots", 2, "Concurrency slot capacity")
 	nodePathFlag := fs.String("node-path", "node", "Path to Node.js executable")
-	runnerPathFlag := fs.String("runner-path", "./runner/node/dist/index.js", "Path to Node runner script")
+	runnerPathFlag := fs.String("runner-path", "", "Path to installed Node runner script")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -246,19 +251,19 @@ func handleWorkerStart(args []string) error {
 	}
 
 	runnerPath := *runnerPathFlag
-	if !fileExists(runnerPath) {
-		candidates := []string{
-			"./runner/node/dist/index.js",
-			"runner/node/dist/index.js",
-			"../runner/node/dist/index.js",
-			"../../runner/node/dist/index.js",
-		}
-		for _, c := range candidates {
-			if fileExists(c) {
-				runnerPath = c
-				break
+	if runnerPath == "" {
+		runnerPath = os.Getenv("DEADBOLT_RUNNER_PATH")
+	}
+	if runnerPath == "" {
+		if executable, err := os.Executable(); err == nil {
+			candidate := filepath.Join(filepath.Dir(executable), "..", "share", "deadbolt", "runner", "index.js")
+			if fileExists(candidate) {
+				runnerPath = candidate
 			}
 		}
+	}
+	if runnerPath == "" || !fileExists(runnerPath) {
+		return fmt.Errorf("Node runner is not installed. Install the Deadbolt runner companion asset or pass --runner-path /path/to/index.js (DEADBOLT_RUNNER_PATH is also supported)")
 	}
 
 	logger := log.New(os.Stdout, "[WORKER] ", log.LstdFlags|log.Lmsgprefix)
@@ -310,6 +315,7 @@ func handleWorkerDrain(args []string) error {
 	if err != nil {
 		return fmt.Errorf("create drain request: %w", err)
 	}
+	req.Header.Set("Idempotency-Key", fmt.Sprintf("worker-drain-%s-%d", workerID, time.Now().UnixNano()))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -324,6 +330,61 @@ func handleWorkerDrain(args []string) error {
 
 	fmt.Printf("Drain signal accepted for worker %s.\n", workerID)
 	return nil
+}
+
+// resolveEnvironmentID uses only authenticated public tenant discovery routes.
+func resolveEnvironmentID(cfg Config, nameOrID string) (string, error) {
+	req, err := cfg.NewRequest(http.MethodGet, "/v1/projects", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("list projects: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("list projects: %s", FormatAPIError(resp.StatusCode, body))
+	}
+	var projects struct {
+		Projects []struct {
+			ID string `json:"id"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &projects); err != nil {
+		return "", fmt.Errorf("parse projects: %w", err)
+	}
+	for _, project := range projects.Projects {
+		req, err := cfg.NewRequest(http.MethodGet, fmt.Sprintf("/v1/projects/%s/environments", project.ID), nil)
+		if err != nil {
+			return "", err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("list environments: %w", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("list environments: %s", FormatAPIError(resp.StatusCode, body))
+		}
+		var environments struct {
+			Environments []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"environments"`
+		}
+		if err := json.Unmarshal(body, &environments); err != nil {
+			return "", fmt.Errorf("parse environments: %w", err)
+		}
+		for _, environment := range environments.Environments {
+			if environment.ID == nameOrID || environment.Name == nameOrID {
+				return environment.ID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("environment %q was not found in the authenticated organization", nameOrID)
 }
 
 func handleWorkerList(args []string) error {

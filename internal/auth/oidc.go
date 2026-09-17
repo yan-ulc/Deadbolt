@@ -237,6 +237,17 @@ func (c *OIDCClient) BuildAuthorizationURL(ctx context.Context, pkce *PKCEParams
 
 // ExchangeAndVerify exchanges the authorization code for tokens and verifies the ID token
 func (c *OIDCClient) ExchangeAndVerify(ctx context.Context, code, codeVerifier, expectedNonce string) (*Identity, error) {
+	return c.exchangeAndVerify(ctx, code, codeVerifier, expectedNonce, c.cfg.ClientID, c.cfg.ClientSecret, c.cfg.RedirectURL)
+}
+
+// ExchangePublicCode verifies an authorization-code exchange for the dedicated
+// public CLI client. Public clients intentionally send no client secret.
+func (c *OIDCClient) ExchangePublicCode(ctx context.Context, code, codeVerifier, redirectURI, expectedNonce, clientID string) (*Identity, error) {
+	publicClient := NewOIDCClient(OIDCConfig{Issuer: c.cfg.Issuer, ClientID: clientID}, c.httpClient)
+	return publicClient.exchangeAndVerify(ctx, code, codeVerifier, expectedNonce, clientID, "", redirectURI)
+}
+
+func (c *OIDCClient) exchangeAndVerify(ctx context.Context, code, codeVerifier, expectedNonce, clientID, clientSecret, redirectURI string) (*Identity, error) {
 	discovery, err := c.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -244,10 +255,12 @@ func (c *OIDCClient) ExchangeAndVerify(ctx context.Context, code, codeVerifier, 
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
-	form.Set("client_id", c.cfg.ClientID)
-	form.Set("client_secret", c.cfg.ClientSecret)
+	form.Set("client_id", clientID)
+	if clientSecret != "" {
+		form.Set("client_secret", clientSecret)
+	}
 	form.Set("code", code)
-	form.Set("redirect_uri", c.cfg.RedirectURL)
+	form.Set("redirect_uri", redirectURI)
 	form.Set("code_verifier", codeVerifier)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, discovery.TokenEndpoint, strings.NewReader(form.Encode()))

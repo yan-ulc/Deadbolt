@@ -42,6 +42,7 @@ type OIDCConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	CLIClientID  string
 }
 
 // Config represents authentication and Go BFF configuration

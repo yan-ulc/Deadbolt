@@ -124,7 +124,7 @@ func TestKeychainStorage(t *testing.T) {
 
 	service := "deadbolt-test"
 	account := "api_key"
-	secret := "db_live_secret1234567890abcdef"
+	secret := "test-credential-value-not-a-token"
 
 	// Store credential
 	err := StoreCredential(service, account, secret)

@@ -168,7 +168,7 @@ func checkNodeToolchain() DoctorCheckResult {
 	if !strings.HasPrefix(versionStr, "v24.") {
 		return DoctorCheckResult{
 			Name:        "Node.js Runtime Version",
-			Status:      StatusWarn,
+			Status:      StatusFail,
 			Message:     fmt.Sprintf("Node.js version is %s, but v24.x is required by runtime contracts (pinned: 24.21.0).", versionStr),
 			Remediation: "Switch to Node.js v24 using your version manager (nvm use 24 / fnm use 24) and rerun `runtime doctor`.",
 		}
