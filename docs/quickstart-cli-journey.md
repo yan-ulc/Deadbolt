@@ -119,19 +119,19 @@ Authenticate the CLI against your Deadbolt control plane:
 ### Interactive Browser Login (PKCE OAuth)
 
 ```bash
-runtime login --url https://api.deadbolt.cloud
+runtime login --control-plane-url https://api.deadbolt.cloud
 ```
 
 ### Headless / API Key Authentication
 
 ```bash
-runtime login --url https://api.deadbolt.cloud --api-key <YOUR_ADMIN_KEY> --org <ORG_ID> --env staging
+runtime login --control-plane-url https://api.deadbolt.cloud --api-key <YOUR_ADMIN_KEY> --org <ORG_ID> --env staging
 ```
 
 Credentials are automatically stored in:
 
 1. **OS Keychain:** macOS Keychain (`security`) or Linux Secret Service (`secret-tool`).
-2. **Encrypted Local Fallback:** `~/.deadbolt/credentials.json` (encrypted with host-derived machine key, file mode `0600`, directory mode `0700`).
+2. **Local/test fallback only:** set `DEADBOLT_CREDENTIALS_DIR` explicitly. Production refuses plaintext file fallback when the OS keychain is unavailable.
 
 ---
 
