@@ -1,4 +1,4 @@
-import { Run, Worker, RunSnapshot, RunEventsResponse, TaskLogsResponse, ResolveReconciliationRequest, ResolveReconciliationResponse, Approval } from "./types.js";
+import { Run, Worker, RunSnapshot, RunEventsResponse, TaskLogsResponse, ResolveReconciliationRequest, ResolveReconciliationResponse } from "./types.js";
 export interface ListRunsResponse {
     items: Run[];
     nextCursor?: string | null;
@@ -68,7 +68,6 @@ export declare class DashboardApiClient {
     getRunEvents(runId: string, cursor?: number, limit?: number): Promise<RunEventsResponse>;
     getRunLogs(runId: string, stepId?: string, attemptId?: string, cursor?: string, limit?: number): Promise<TaskLogsResponse>;
     resolveReconciliationCase(caseId: string, body: ResolveReconciliationRequest, idempotencyKey?: string): Promise<ResolveReconciliationResponse>;
-    decideApproval(approvalId: string, decision: "approved" | "rejected", expectedRevision: number, comment: string): Promise<Approval>;
     cancelRun(runId: string, expectedRevision: number, idempotencyKey?: string): Promise<Run>;
     listProjects(): Promise<ProjectSummary[]>;
     listProjectEnvironments(projectId: string): Promise<EnvironmentSummary[]>;

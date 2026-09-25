@@ -114,10 +114,10 @@ func ValidateWorkflow(manifest any, definitions []any) error {
 			return failure("DUPLICATE_NODE_ID")
 		}
 		byID[id] = n
-		if n["type"] != "task" && n["type"] != "approval" {
+		if n["type"] != "task" {
 			return failure("UNSUPPORTED_CAPABILITY")
 		}
-		if n["type"] == "task" && tasks[str(n["task"])] == nil {
+		if tasks[str(n["task"])] == nil {
 			return failure("MISSING_TASK_REF")
 		}
 	}
@@ -189,12 +189,6 @@ func ValidateWorkflow(manifest any, definitions []any) error {
 						return failure("INPUT_MAPPING_ERROR")
 					}
 					source = tasks[str(byID[id]["task"])]["outputSchema"]
-					if byID[id]["type"] == "approval" {
-						source = obj(byID[id]["approval"])["decisionSchema"]
-						if source == nil {
-							return nil
-						}
-					}
 					if isOutput {
 						used[id] = true
 					}

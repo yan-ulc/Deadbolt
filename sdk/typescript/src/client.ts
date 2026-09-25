@@ -78,28 +78,6 @@ export interface RunSnapshot extends Run {
   readonly error?: ErrorEnvelope;
 }
 
-export interface Approval {
-  readonly id: string;
-  readonly stepId: string;
-  readonly runId: string;
-  readonly environmentId: string;
-  readonly payload: JSONValue;
-  readonly decisionSchema: JSONValue;
-  readonly requiredPermission: string;
-  readonly status:
-    | "PENDING"
-    | "APPROVED"
-    | "REJECTED"
-    | "EXPIRED"
-    | "CANCELLED";
-  readonly decision?: "approved" | "rejected";
-  readonly actorId?: string;
-  readonly decidedAt?: string;
-  readonly comment?: string;
-  readonly expiresAt: string;
-  readonly revision: number;
-}
-
 export interface DeadboltClientOptions {
   baseUrl?: string;
   apiKey?: string;
@@ -325,46 +303,6 @@ export class DeadboltClient {
 
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
       }
-    },
-  };
-
-  readonly approvals = {
-    list: async (
-      environment = this.defaultEnvironment,
-      includeClosed = false,
-    ): Promise<readonly Approval[]> => {
-      const res = await this.request<{ items: Approval[] }>(
-        "GET",
-        `/v1/approvals?environment=${encodeURIComponent(environment)}&includeClosed=${includeClosed}`,
-      );
-      return res.data.items;
-    },
-    get: async (approvalId: string): Promise<Approval> => {
-      if (!approvalId || typeof approvalId !== "string")
-        fail("INVALID_APPROVAL_ID");
-      const res = await this.request<Approval>(
-        "GET",
-        `/v1/approvals/${encodeURIComponent(approvalId)}`,
-      );
-      return res.data;
-    },
-    decide: async (
-      approvalId: string,
-      decision: "approved" | "rejected",
-      expectedRevision: number,
-      comment = "",
-    ): Promise<Approval> => {
-      if (!approvalId || typeof approvalId !== "string")
-        fail("INVALID_APPROVAL_ID");
-      if (decision !== "approved" && decision !== "rejected")
-        fail("INVALID_APPROVAL_DECISION");
-      const res = await this.request<Approval>(
-        "POST",
-        `/v1/approvals/${encodeURIComponent(approvalId)}/decision`,
-        {},
-        { decision, expectedRevision, comment },
-      );
-      return res.data;
     },
   };
 

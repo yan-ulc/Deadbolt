@@ -72,12 +72,11 @@ func (e *WorkerEngine) SetAfterCompleteCommitHookForTest(hook func() error) {
 }
 
 type workflowNode struct {
-	ID       string         `json:"id"`
-	Type     string         `json:"type"`
-	Task     string         `json:"task"`
-	After    []string       `json:"after"`
-	Input    any            `json:"input"`
-	Approval map[string]any `json:"approval"`
+	ID    string   `json:"id"`
+	Type  string   `json:"type"`
+	Task  string   `json:"task"`
+	After []string `json:"after"`
+	Input any      `json:"input"`
 }
 
 type workflowManifest struct {
@@ -890,7 +889,7 @@ func (e *WorkerEngine) Claim(ctx context.Context, session *worker.WorkerSessionC
 				JOIN worker_deployments wd ON wd.session_id=$1::uuid AND wd.bundle_digest=d.bundle_digest
 				JOIN worker_sessions candidate_ws ON candidate_ws.id=wd.session_id
 				JOIN workers candidate_w ON candidate_w.id=candidate_ws.worker_id
-				WHERE rs.organization_id=$2::uuid AND rs.environment_id=$3::uuid AND rs.kind='task'
+				WHERE rs.organization_id=$2::uuid AND rs.environment_id=$3::uuid
 					AND (candidate_w.pool_name=$5 OR $5 = '' OR candidate_w.pool_name='default')
 					AND rs.state='READY' AND rs.eligible_at <= clock_timestamp()
 					AND (r.status IN ('QUEUED','RUNNING') OR (r.status='WAITING' AND r.reason_code='QUOTA_WAIT'))
@@ -1709,51 +1708,6 @@ func advanceAfterStepSuccessTx(ctx context.Context, tx storage.Tx, organizationI
 						}
 						continue
 					}
-					if node.Type == "approval" {
-						payload := any(map[string]any{})
-						decisionSchema := any(map[string]any{"type": "string", "enum": []string{"approved", "rejected"}})
-						requiredPermission := "approvals:decide"
-						if node.Approval != nil {
-							if v, ok := node.Approval["payload"]; ok {
-								payload = v
-							}
-							if v, ok := node.Approval["decisionSchema"]; ok {
-								decisionSchema = v
-							}
-							if v, ok := node.Approval["requiredPermission"].(string); ok && v != "" {
-								requiredPermission = v
-							}
-						}
-						payloadJSON, err := json.Marshal(payload)
-						if err != nil {
-							return err
-						}
-						schemaJSON, err := json.Marshal(decisionSchema)
-						if err != nil {
-							return err
-						}
-						if _, err := tx.Exec(ctx, `
-							INSERT INTO approvals (organization_id, environment_id, step_id, payload, decision_schema,
-								required_permission, expires_at)
-							SELECT $1::uuid, r.environment_id, $2::uuid, $3::jsonb, $4::jsonb, $5,
-								LEAST(clock_timestamp()+INTERVAL '24 hours', COALESCE(r.deadline_at, 'infinity'::timestamptz))
-							FROM runs r WHERE r.id=$6::uuid AND r.organization_id=$1::uuid
-							ON CONFLICT (step_id) DO NOTHING`, organizationID, st.id, payloadJSON, schemaJSON, requiredPermission, runID); err != nil {
-							return err
-						}
-						if _, err := tx.Exec(ctx, `UPDATE run_steps SET state='WAITING', wait_reason='APPROVAL', eligible_at=NULL, updated_at=clock_timestamp() WHERE id=$1::uuid AND organization_id=$2::uuid AND state='BLOCKED'`, st.id, organizationID); err != nil {
-							return err
-						}
-						st.state = "WAITING"
-						if _, err := tx.Exec(ctx, `UPDATE runs SET status='WAITING', reason_code='APPROVAL', updated_at=clock_timestamp() WHERE id=$1::uuid AND organization_id=$2::uuid AND status IN ('QUEUED','RUNNING')`, runID, organizationID); err != nil {
-							return err
-						}
-						if err := appendRunEvent(ctx, tx, organizationID, runID, "APPROVAL_REQUESTED", map[string]any{"stepId": st.id, "nodeId": node.ID}); err != nil {
-							return err
-						}
-						changed = true
-						continue
-					}
 					// Evaluate input mapping if present
 					if node.Input != nil {
 						mapped, mapErr := contracts.MapInput(node.Input, runInput, outputsMap)
@@ -2265,12 +2219,6 @@ func (e *WorkerEngine) ReconcileExpiredLeases(ctx context.Context, organizationI
 		}
 		totalReclaimed += fired
 		affectedRuns = append(affectedRuns, firedRuns...)
-		expired, expiredRuns, err := expireDueApprovalsTx(ctx, tx, organizationID)
-		if err != nil {
-			return err
-		}
-		totalReclaimed += expired
-		affectedRuns = append(affectedRuns, expiredRuns...)
 		// The run deadline stays active while held: terminalize overdue held
 		// runs that have no live work left to settle them.
 		overdue, overdueRuns, err := failOverdueRunsTx(ctx, tx, organizationID)
@@ -2420,15 +2368,6 @@ func (e *WorkerEngine) ReconcileReadyWork(ctx context.Context, organizationID st
 					}
 				}
 				if !depsReady {
-					continue
-				}
-				if node.Type == "approval" {
-					if err := activateApprovalTx(ctx, tx, organizationID, runID, step.id, &node); err != nil {
-						return err
-					}
-					if _, err := tx.Exec(ctx, `UPDATE runs SET status='WAITING', reason_code='APPROVAL', updated_at=clock_timestamp() WHERE id=$1::uuid AND organization_id=$2::uuid AND status IN ('QUEUED','RUNNING')`, runID, organizationID); err != nil {
-						return err
-					}
 					continue
 				}
 				result, err := tx.Exec(ctx, `UPDATE run_steps

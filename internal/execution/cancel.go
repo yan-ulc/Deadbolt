@@ -170,11 +170,6 @@ func (e *WorkerEngine) cancelRunTx(
 		WHERE run_id=$1::uuid AND organization_id=$2::uuid AND state='PENDING'`, runID, orgID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE approvals SET status='CANCELLED', revision=revision+1
-		WHERE organization_id=$1::uuid AND status='PENDING' AND step_id IN
-			(SELECT id FROM run_steps WHERE run_id=$2::uuid AND organization_id=$1::uuid)`, orgID, runID); err != nil {
-		return nil, err
-	}
 	var actorID *string
 	if audit.ActorID != nil && strings.TrimSpace(*audit.ActorID) != "" {
 		actorID = audit.ActorID

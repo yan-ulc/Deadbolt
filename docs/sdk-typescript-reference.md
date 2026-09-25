@@ -164,7 +164,7 @@ export const researchWorkflow = defineWorkflow({
 At definition time (`validateOnInit: true`), `defineWorkflow` validates the complete graph:
 
 1. **Linear Graph Enforcement:** In MVP/M1, graphs must be strictly linear (one root, at most one predecessor and one successor per node).
-2. **Capability Gates:** `approval` nodes are supported in M4 and persist a human decision in the control plane. `choice`, `merge`, and `delay` remain gated with `UNSUPPORTED_CAPABILITY`.
+2. **Capability Gates:** Unsupported node types (`choice`, `merge`, `approval`, `delay`) fail locally with `UNSUPPORTED_CAPABILITY`.
 3. **Task Resolution:** Every referenced task must be resolved; unresolved task names fail with `MISSING_TASK_REF`.
 4. **No Cycles:** Cycle detection ensures directed acyclic structure (`CYCLE_DETECTED`).
 5. **No Orphan Leaves:** Every leaf node must either connect to workflow `output` or declare `sideEffect: true` (`ORPHAN_LEAF`).

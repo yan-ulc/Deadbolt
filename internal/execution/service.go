@@ -334,7 +334,7 @@ func (s *Service) CreateRun(
 			}
 			initState := "BLOCKED"
 			var eligibleAt any = nil
-			if len(node.After) == 0 && kind != "approval" {
+			if len(node.After) == 0 {
 				initState = "READY"
 				eligibleAt = time.Now()
 			}
@@ -548,32 +548,6 @@ func (s *Service) GetRun(ctx context.Context, orgID, runID string) (*RunSnapshot
 				}
 			}
 		}
-		approvals := make([]ApprovalDTO, 0)
-		approvalRows, err := tx.Query(ctx, `SELECT a.id::text FROM approvals a JOIN run_steps rs ON rs.id=a.step_id AND rs.organization_id=a.organization_id WHERE a.organization_id=$1::uuid AND rs.run_id=$2::uuid ORDER BY a.created_at ASC, a.id ASC`, orgID, runID)
-		if err != nil {
-			return err
-		}
-		var approvalIDs []string
-		for approvalRows.Next() {
-			var id string
-			if err := approvalRows.Scan(&id); err != nil {
-				approvalRows.Close()
-				return err
-			}
-			approvalIDs = append(approvalIDs, id)
-		}
-		if err := approvalRows.Err(); err != nil {
-			approvalRows.Close()
-			return err
-		}
-		approvalRows.Close()
-		for _, id := range approvalIDs {
-			var a *ApprovalDTO
-			if err := scanApproval(ctx, tx, orgID, id, &a); err != nil {
-				return err
-			}
-			approvals = append(approvals, *a)
-		}
 
 		var activeWorkers int
 		if run.DeploymentID != "" {
@@ -688,7 +662,6 @@ func (s *Service) GetRun(ctx context.Context, orgID, runID string) (*RunSnapshot
 			LastEventSequence:       lastEventSeq,
 			Steps:                   steps,
 			ReconciliationCases:     reconciliationCases,
-			Approvals:               approvals,
 			Output:                  output,
 			Error:                   runError,
 			WaitingReason:           waitingReason,

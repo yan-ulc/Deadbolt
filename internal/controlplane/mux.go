@@ -101,12 +101,6 @@ func BuildMuxWithComponents(cfg auth.Config, pool *pgxpool.Pool, healthChecker *
 		mux.Handle("POST /api/v1/reconciliation-cases/{id}/resolve", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapRunsReconcile, executionHandler.ResolveCase))))
 		mux.Handle("POST /v1/reconciliation-cases/{id}/resolve", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapRunsReconcile, executionHandler.ResolveCase))))
 		mux.Handle("POST /api/v1/runs/{id}/cancel", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapRunsControl, executionHandler.CancelRun))))
-		mux.Handle("GET /api/v1/approvals", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.ListApprovals))))
-		mux.Handle("GET /v1/approvals", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.ListApprovals))))
-		mux.Handle("GET /api/v1/approvals/{id}", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.GetApproval))))
-		mux.Handle("GET /v1/approvals/{id}", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.GetApproval))))
-		mux.Handle("POST /api/v1/approvals/{id}/decision", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.DecideApproval))))
-		mux.Handle("POST /v1/approvals/{id}/decision", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapApprovalsDecide, executionHandler.DecideApproval))))
 		mux.Handle("POST /v1/runs/{id}/cancel", tenantHandler.WithRequestID(tenantHandler.RequireAuth(tenantHandler.RequireOrgScope(tenant.CapRunsControl, executionHandler.CancelRun))))
 
 		// Scoped artifacts: worker sessions (dbs_ bearers) authenticate

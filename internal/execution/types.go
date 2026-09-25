@@ -54,38 +54,10 @@ type RunSnapshotDTO struct {
 	LastEventSequence       int64                   `json:"lastEventSequence"`
 	Steps                   []RunStepDTO            `json:"steps"`
 	ReconciliationCases     []ReconciliationCaseDTO `json:"reconciliationCases"`
-	Approvals               []ApprovalDTO           `json:"approvals"`
 	Output                  any                     `json:"output,omitempty"`
 	Error                   any                     `json:"error,omitempty"`
 	WaitingReason           *string                 `json:"waitingReason,omitempty"`
 	ActiveCompatibleWorkers int                     `json:"activeCompatibleWorkers"`
-}
-
-type ApprovalDTO struct {
-	ID                 string  `json:"id"`
-	StepID             string  `json:"stepId"`
-	RunID              string  `json:"runId"`
-	EnvironmentID      string  `json:"environmentId"`
-	Payload            any     `json:"payload"`
-	DecisionSchema     any     `json:"decisionSchema"`
-	RequiredPermission string  `json:"requiredPermission"`
-	Status             string  `json:"status"`
-	Decision           *string `json:"decision,omitempty"`
-	ActorID            *string `json:"actorId,omitempty"`
-	DecidedAt          *string `json:"decidedAt,omitempty"`
-	Comment            *string `json:"comment,omitempty"`
-	ExpiresAt          string  `json:"expiresAt"`
-	Revision           int64   `json:"revision"`
-}
-
-type ApprovalDecisionRequest struct {
-	Decision         string `json:"decision"`
-	Comment          string `json:"comment"`
-	ExpectedRevision int64  `json:"expectedRevision"`
-}
-
-type ApprovalListResponseDTO struct {
-	Items []ApprovalDTO `json:"items"`
 }
 
 // ReconciliationCaseDTO is one unknown-outcome hold. Evidence carries the

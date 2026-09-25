@@ -191,20 +191,6 @@ export class DashboardApiClient {
         }
         return res.json();
     }
-    async decideApproval(approvalId, decision, expectedRevision, comment) {
-        const res = await apiFetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(approvalId)}/decision`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-CSRF-Token": readCsrfToken(),
-            },
-            body: JSON.stringify({ decision, expectedRevision, comment }),
-        });
-        if (!res.ok) {
-            throw new Error(`Failed to decide approval (HTTP ${res.status}): ${res.statusText}`);
-        }
-        return res.json();
-    }
     // cancelRun requests durable cancellation. The caller binds the revision
     // read from the snapshot; a 409 means the run changed and the dialog must
     // refresh instead of retrying blindly. Cancelling never rolls back

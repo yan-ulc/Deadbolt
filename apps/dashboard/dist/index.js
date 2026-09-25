@@ -496,17 +496,6 @@ function initDashboard() {
         `;
             })
                 .join("");
-            const approvalsHtml = (snap.approvals ?? [])
-                .filter((a) => a.status === "PENDING")
-                .map((a) => `
-          <article class="approval-card" aria-labelledby="approval-${escapeHtml(a.id)}">
-            <h4 id="approval-${escapeHtml(a.id)}">Human approval required</h4>
-            <pre class="code-block">${escapeHtml(JSON.stringify(a.payload, null, 2))}</pre>
-            <div class="approval-meta">Expires ${new Date(a.expiresAt).toLocaleString()} · revision ${a.revision}</div>
-            <button class="approval-action" data-approval-id="${escapeHtml(a.id)}" data-decision="approved" data-revision="${a.revision}">Approve</button>
-            <button class="approval-action danger-btn" data-approval-id="${escapeHtml(a.id)}" data-decision="rejected" data-revision="${a.revision}">Reject</button>
-          </article>`)
-                .join("");
             container.innerHTML = `
         <div class="inspector-header">
           <div class="run-title-group">
@@ -540,8 +529,6 @@ function initDashboard() {
           <h3>Execution Graph & Attempts</h3>
           <div class="steps-grid">${stepsHtml}</div>
         </section>
-
-        ${approvalsHtml ? `<section class="approvals-section"><h3>Approval Inbox</h3><div class="approvals-grid">${approvalsHtml}</div></section>` : ""}
 
         <section class="events-section">
           <h3>Execution Event History</h3>
@@ -596,29 +583,6 @@ function initDashboard() {
                     if (caseId && stepId && Number.isFinite(revision)) {
                         openResolveDialog(api, snap, stepId, caseId, revision, el);
                     }
-                });
-            });
-            container.querySelectorAll(".approval-action").forEach((btn) => {
-                btn.addEventListener("click", (e) => {
-                    const el = e.currentTarget;
-                    const approvalId = el.dataset.approvalId;
-                    const decision = el.dataset.decision;
-                    const revision = Number(el.dataset.revision);
-                    if (!approvalId || !Number.isFinite(revision))
-                        return;
-                    const comment = window.prompt("Comment (optional, max 280 characters):", "") ?? "";
-                    if (comment.length > 280) {
-                        window.alert("Comment must be at most 280 characters.");
-                        return;
-                    }
-                    el.disabled = true;
-                    api
-                        .decideApproval(approvalId, decision, revision, comment)
-                        .then(() => activeInspector?.fetchSnapshot())
-                        .catch((err) => {
-                        el.disabled = false;
-                        window.alert(err instanceof Error ? err.message : String(err));
-                    });
                 });
             });
             // Re-render cached events and logs if activeInspector already has them

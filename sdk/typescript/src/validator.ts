@@ -103,10 +103,8 @@ function workflow(manifest: JSONValue, definitions: JSONValue[]): void {
     const id = String(n.id);
     if (byId.has(id)) fail("DUPLICATE_NODE_ID");
     byId.set(id, n);
-    if (n.type !== "task" && n.type !== "approval")
-      fail("UNSUPPORTED_CAPABILITY");
-    if (n.type === "task" && !tasks.has(String(n.task)))
-      fail("MISSING_TASK_REF");
+    if (n.type !== "task") fail("UNSUPPORTED_CAPABILITY");
+    if (!tasks.has(String(n.task))) fail("MISSING_TASK_REF");
   }
   for (const n of nodes)
     for (const d of (n.after ?? []) as string[]) {

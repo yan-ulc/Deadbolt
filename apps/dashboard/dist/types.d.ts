@@ -37,24 +37,10 @@ export interface RunSnapshot extends Run {
     lastEventSequence: number;
     steps: RunStep[];
     reconciliationCases?: ReconciliationCase[];
-    approvals?: Approval[];
     output?: unknown;
     error?: unknown;
     waitingReason?: string | null;
     activeCompatibleWorkers?: number;
-}
-export interface Approval {
-    id: string;
-    stepId: string;
-    runId: string;
-    payload: unknown;
-    status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "CANCELLED";
-    decision?: "approved" | "rejected";
-    actorId?: string;
-    decidedAt?: string;
-    comment?: string;
-    expiresAt: string;
-    revision: number;
 }
 export interface ReconciliationCase {
     id: string;
